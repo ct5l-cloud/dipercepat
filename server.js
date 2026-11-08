@@ -9,50 +9,70 @@ const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
 
 // Alamat unggah otomatis untuk node atau langganan (isi dengan beranda proyek Merge-sub setelah diterapkan, contoh: https://merge.xxx.com)
-const UPLOAD_URL = process.env.UPLOAD_URL || '';      
+const UPLOAD_URL = process.env.UPLOAD_URL || '';
 // Isi URL proyek jika perlu mengunggah langganan atau menjaga agar proyek tetap aktif, contoh: https://google.com
-const PROJECT_URL = process.env.PROJECT_URL || '';    
+const PROJECT_URL = process.env.PROJECT_URL || '';
 // false mematikan fitur jaga aktif otomatis, true mengaktifkan (wajib mengisi variabel PROJECT_URL bersamaan)
-const AUTO_ACCESS = process.env.AUTO_ACCESS || false; 
-// Direktori operasi, tempat berkas sub node disimpan
-const FILE_PATH = process.env.FILE_PATH || '.tmp';   
+const AUTO_ACCESS = process.env.AUTO_ACCESS || false;
 // Jalur langganan
-const SUB_PATH = process.env.SUB_PATH || 'sub';       
+const SUB_PATH = process.env.SUB_PATH || 'sub';
 // Port layanan HTTP untuk langganan
-const PORT = process.env.SERVER_PORT || process.env.PORT || 3000;        
+const PORT = process.env.SERVER_PORT || process.env.PORT || 3000;
 // Menggunakan Nezha v1, jika dijalankan di berbagai platform berbeda perlu mengubah UUID agar tidak tertimpa
-const UUID = process.env.UUID || '1f37ac4f-fdd0-49df-9406-1eda70a1d512'; 
+const UUID = process.env.UUID || '1f37ac4f-fdd0-49df-9406-1eda70a1d512';
 // Format pengisian Nezha v1: nz.abc.com:8008 | Format pengisian Nezha v0: nz.abc.com
-const NEZHA_SERVER = process.env.NEZHA_SERVER || '';        
+const NEZHA_SERVER = process.env.NEZHA_SERVER || '';
 // Jika menggunakan Nezha v1 biarkan kosong, Nezha v0 wajib diisi
-const NEZHA_PORT = process.env.NEZHA_PORT || '';            
+const NEZHA_PORT = process.env.NEZHA_PORT || '';
 // NZ_CLIENT_SECRET untuk Nezha v1 atau kunci agen untuk Nezha v0
-const NEZHA_KEY = process.env.NEZHA_KEY || '';              
+const NEZHA_KEY = process.env.NEZHA_KEY || '';
 
 // ========================================================
 // VARIABEL ARGO TUNNEL DIBIKIN DINAMIS (ANTI HARDCODE)
 // ========================================================
 // Domain terowongan tetap, jika kosong otomatis mengaktifkan terowongan sementara (Quick Tunnel)
-const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';          
+const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 // JSON atau token terowongan tetap milik lu sendiri, diisi via Env Dashboard
-const ARGO_AUTH = process.env.ARGO_AUTH || '';              
+const ARGO_AUTH = process.env.ARGO_AUTH || '';
 // Port terowongan tetap bawaan asli (8001)
-const ARGO_PORT = process.env.ARGO_PORT || 8001;            
+const ARGO_PORT = process.env.ARGO_PORT || 8001;
 
 // Domain atau IP tujuan pilihan untuk node
-const CFIP = process.env.CFIP || '104.18.17.214';            
+const CFIP = process.env.CFIP || '104.18.17.214';
 // Port yang sesuai untuk domain atau IP tujuan pilihan node
-const CFPORT = process.env.CFPORT || 443;                   
+const CFPORT = process.env.CFPORT || 443;
 // Nama Node
-const NAME = process.env.NAME || 'ddfathu';                        
+const NAME = process.env.NAME || 'ddfathu';
 
-// Membuat folder operasi jika belum ada
-if (!fs.existsSync(FILE_PATH)) {
-  fs.mkdirSync(FILE_PATH);
-  console.log(`${FILE_PATH} is created`);
-} else {
-  console.log(`${FILE_PATH} already exists`);
-}
+// ========================================================
+// FIX: Auto-resolve direktori writable (read-only FS safe)
+// ========================================================
+const FILE_PATH = (() => {
+  const preferred = process.env.FILE_PATH || '.tmp';
+  const candidates = [
+    preferred,
+    path.join(os.tmpdir(), 'merge-sub'),
+    '/tmp/merge-sub',
+    path.join(os.homedir(), '.merge-sub'),
+  ];
+
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+      if (dir !== preferred) {
+        console.log(`[WARN] "${preferred}" not writable, fallback to "${dir}"`);
+      } else {
+        console.log(`[OK] FILE_PATH = ${dir}`);
+      }
+      return dir;
+    } catch (e) {
+      console.log(`[SKIP] ${dir} -> ${e.code || e.message}`);
+    }
+  }
+
+  throw new Error('No writable directory found. Set FILE_PATH env to a writable path.');
+})();
 
 // Menghasilkan nama acak 6 karakter untuk penyamaran proses
 function generateRandomName() {
@@ -245,8 +265,13 @@ function getSystemArchitecture() {
 function downloadFile(fileName, fileUrl, callback) {
   const filePath = fileName;
 
-  if (!fs.existsSync(FILE_PATH)) {
-    fs.mkdirSync(FILE_PATH, { recursive: true });
+  // FIX: safe mkdir (skip if already resolved and writable)
+  try {
+    if (!fs.existsSync(FILE_PATH)) {
+      fs.mkdirSync(FILE_PATH, { recursive: true });
+    }
+  } catch (e) {
+    // abaikan — FILE_PATH sudah dipastikan writable oleh resolver di atas
   }
 
   const writer = fs.createWriteStream(filePath);
@@ -530,7 +555,7 @@ async function getMetaInfo() {
 }
 
 async function generateLinks(argoDomain) {
-  currentActiveDomain = argoDomain; 
+  currentActiveDomain = argoDomain;
   const ISP = await getMetaInfo();
   const nodeName = NAME ? `${NAME}-${ISP}` : ISP;
   return new Promise((resolve) => {
@@ -688,7 +713,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`http server is running on port:${PORT}!`);
-  
+
   // 🔥 FIX UTAMA: Ulangi ekstraksi domain setiap 3 detik agar URL Quick Tunnel terbaca di RAM setelah Cloudflared sukses binding
   setInterval(() => {
     extractDomains();
